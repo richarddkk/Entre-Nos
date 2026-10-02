@@ -1,0 +1,83 @@
+rules_version = '2';
+service cloud.firestore {
+ match /databases/{database}/documents {
+  function signed() { return request.auth != null; }
+  function roomPath(roomId) { return /databases/$(database)/documents/rooms/$(roomId); }
+  function member(roomId) { return signed() && request.auth.uid in get(roomPath(roomId)).data.memberIds; }
+  function memberAfter(roomId) { return signed() && request.auth.uid in getAfter(roomPath(roomId)).data.memberIds; }
+  function ownerAfter(roomId) { return signed() && getAfter(roomPath(roomId)).data.ownerId == request.auth.uid; }
+  function category(c) { return c in ['fofas','conhecer','quem','prefere','provocantes','intimidade','desejos','safadas']; }
+  function text(v,max) { return v is string && v.size() > 0 && v.size() <= max; }
+  function roundPath(roomId,id) { return /databases/$(database)/documents/rooms/$(roomId)/rounds/$(id); }
+  match /rooms/{roomId} {
+   // O código aleatório funciona como convite. Este documento tem apenas
+   // apelidos e metadados; perguntas e respostas exigem associação à sala.
+   allow get: if signed();
+   allow list: if signed() && request.auth.uid in resource.data.memberIds;
+   allow create: if signed()
+    && request.resource.data.keys().hasOnly(['ownerId','guestId','memberIds','ownerName','guestName','currentRound','category','roundCount','createdAt'])
+    && request.resource.data.ownerId == request.auth.uid
+    && request.resource.data.memberIds == [request.auth.uid]
+    && request.resource.data.guestId == null && request.resource.data.guestName == null
+    && text(request.resource.data.ownerName,30)
+    && text(request.resource.data.currentRound,40)
+    && (request.resource.data.category == 'all' || category(request.resource.data.category))
+    && request.resource.data.roundCount == 1
+    && request.resource.data.createdAt is number
+    && existsAfter(roundPath(roomId,request.resource.data.currentRound));
+   allow update: if signed() && (join() || advance());
+   function join() {
+    return resource.data.guestId == null && request.auth.uid != resource.data.ownerId
+     && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['guestId','guestName','memberIds'])
+     && request.resource.data.guestId == request.auth.uid
+     && text(request.resource.data.guestName,30)
+     && request.resource.data.memberIds == [resource.data.ownerId,request.auth.uid];
+   }
+   function advance() {
+    return request.auth.uid in resource.data.memberIds
+     && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['currentRound','category','roundCount'])
+     && text(request.resource.data.currentRound,40)
+     && request.resource.data.currentRound != resource.data.currentRound
+     && (request.resource.data.category == 'all' || category(request.resource.data.category))
+     && request.resource.data.roundCount == resource.data.roundCount + 1
+     && !exists(roundPath(roomId,request.resource.data.currentRound))
+     && existsAfter(roundPath(roomId,request.resource.data.currentRound));
+   }
+   match /questions/{questionId} {
+    allow read: if member(roomId);
+    allow create, update: if ownerAfter(roomId)
+     && request.resource.data.keys().hasOnly(['content','category','active'])
+     && text(request.resource.data.content,500)
+     && category(request.resource.data.category)
+     && request.resource.data.active is bool;
+   }
+   match /rounds/{roundId} {
+    allow read: if member(roomId);
+    allow create: if memberAfter(roomId)
+     && request.resource.data.keys().hasOnly(['questionId','content','category','created_at','answers'])
+     && getAfter(roomPath(roomId)).data.currentRound == roundId
+     && text(request.resource.data.questionId,40)
+     && text(request.resource.data.content,500)
+     && category(request.resource.data.category)
+     && request.resource.data.created_at is number
+     && request.resource.data.answers is map && request.resource.data.answers.size() == 0
+     && getAfter(/databases/$(database)/documents/rooms/$(roomId)/questions/$(request.resource.data.questionId)).data.active == true
+     && request.resource.data.content == getAfter(/databases/$(database)/documents/rooms/$(roomId)/questions/$(request.resource.data.questionId)).data.content
+     && request.resource.data.category == getAfter(/databases/$(database)/documents/rooms/$(roomId)/questions/$(request.resource.data.questionId)).data.category
+     && (getAfter(roomPath(roomId)).data.category == 'all' || request.resource.data.category == getAfter(roomPath(roomId)).data.category);
+    allow update: if member(roomId)
+     && getAfter(roomPath(roomId)).data.currentRound == roundId
+     && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['answers'])
+     && request.resource.data.answers is map
+     && !(request.auth.uid in resource.data.answers)
+     && request.resource.data.answers.diff(resource.data.answers).affectedKeys().hasOnly([request.auth.uid])
+     && validAnswer(request.resource.data.answers[request.auth.uid]);
+    function validAnswer(a) {
+     return a is map && a.keys().hasOnly(['content','created_at'])
+      && text(a.content,1000) && a.created_at is number;
+    }
+   }
+  }
+  match /{document=**} { allow read,write: if false; }
+ }
+}

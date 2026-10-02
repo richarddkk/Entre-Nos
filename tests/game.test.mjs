@@ -1,0 +1,10 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { selectQuestion, requireCurrentRound, validateContent, validateJoin } from '../src/game-logic.mjs';
+const questions = [{ id: 'a', category: 'fofas', active: true }, { id: 'b', category: 'desejos', active: true }, { id: 'c', category: 'fofas', active: false }, { id: 'd', category: 'fofas', active: true }];
+test('filters category, ignores deleted questions and already played cards', () => { assert.equal(selectQuestion(questions, [{ questionId: 'a' }], 'fofas', () => 0).id, 'd'); assert.equal(selectQuestion(questions, [], 'desejos', () => 0).id, 'b'); });
+test('all categories include the whole active pool', () => { assert.equal(selectQuestion(questions, [], 'all', () => .4).id, 'b'); });
+test('exhaustion has an actionable error', () => assert.throws(() => selectQuestion(questions, [{ questionId: 'a' }, { questionId: 'd' }], 'fofas'), /outra categoria/));
+test('stale answers are rejected', () => { assert.doesNotThrow(() => requireCurrentRound({ currentRound: 'a' }, 'a')); assert.throws(() => requireCurrentRound({ currentRound: 'b' }, 'a'), /pergunta mudou/); });
+test('limits nonempty content instead of silently truncating answers', () => { assert.equal(validateContent('  carinho  ', 30), 'carinho'); assert.throws(() => validateContent(' ', 30)); assert.throws(() => validateContent('a'.repeat(1001), 1000)); });
+test('joining is idempotent for existing members and limited to two people', () => { assert.equal(validateJoin({ memberIds: ['a'], guestId: null }, 'a'), false); assert.equal(validateJoin({ memberIds: ['a'], guestId: null }, 'b'), true); assert.throws(() => validateJoin({ memberIds: ['a', 'b'], guestId: 'b' }, 'c'), /duas pessoas/); });
